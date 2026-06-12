@@ -1,0 +1,53 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Node.js
+node_modules/
+dist/
+build/
+.next/
+.nuxt/
+.output/
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+
+# Go
+/vendor/
+
+# Rust
+/target/
+
+# Java
+target/
+*.class
+*.jar
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker
+.docker/
+
+# Test & Coverage
+coverage/
+.nyc_output/
+htmlcov/
+.coverage
