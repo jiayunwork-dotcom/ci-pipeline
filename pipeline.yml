@@ -1,0 +1,137 @@
+stages:
+  - setup
+  - build
+  - test
+  - package
+  - deploy
+
+variables:
+  VERSION: "1.0.0"
+  BUILD_DIR: "build"
+  TARGET: "release"
+  APP_NAME: "myapp"
+
+jobs:
+  - name: setup
+    stage: setup
+    timeout: 300
+    cache:
+      - vendor
+      - ~/.cargo
+    steps:
+      - name: install dependencies
+        run: echo "Installing dependencies..." && mkdir -p vendor
+        env:
+          VERBOSE: "1"
+      - name: setup env
+        run: echo "Setup complete"
+        allow_failure: false
+
+  - name: build
+    stage: build
+    depends_on:
+      - setup
+    timeout: 600
+    retry: 2
+    cache:
+      - target
+      - vendor
+    needs_artifacts: []
+    steps:
+      - name: compile
+        run: |
+          echo "Building version ${{VERSION}} for ${{GOOS:-linux}}"
+          mkdir -p build
+          echo "version=${{VERSION}}" > build/version.txt
+          echo "binary-${{VERSION}}" > build/${{APP_NAME}}
+      - name: capture version output
+        run: echo "::set-output name=version::${{VERSION}}"
+
+  - name: test
+    stage: test
+    depends_on:
+      - build
+    timeout: 600
+    condition: "success()"
+    needs_artifacts:
+      - build
+    steps:
+      - name: unit tests
+        run: |
+          echo "Running unit tests..."
+          if [ -f build/version.txt ]; then
+            echo "Found artifact: $(cat build/version.txt)"
+          fi
+          echo "All tests passed!"
+      - name: integration tests
+        run: |
+          echo "Running integration tests with version ${{jobs.build.outputs.version}}"
+          echo "::set-output name=test_result::pass"
+
+  - name: lint
+    stage: test
+    depends_on:
+      - build
+    condition: "success()"
+    steps:
+      - name: run linter
+        run: echo "Running linter... (skipped for demo)"
+        allow_failure: true
+
+  - name: package
+    stage: package
+    depends_on:
+      - test
+      - lint
+    timeout: 300
+    artifacts:
+      - paths:
+          - build/
+          - dist/
+    steps:
+      - name: create distribution
+        run: |
+          echo "Packaging ${{APP_NAME}}-${{VERSION}}"
+          mkdir -p dist
+          cp -r build/* dist/
+          echo "Package contents:"
+          ls -la dist/
+      - name: compute checksum
+        run: |
+          cd dist && find . -type f | sort | xargs -I {} shasum -a 256 {} > checksums.txt
+          cat checksums.txt
+        env:
+          CHECKSUM_ALGO: "sha256"
+
+  - name: deploy-staging
+    stage: deploy
+    depends_on:
+      - package
+    condition: "success() && '${{DEPLOY_ENV}}' == 'staging' || always()"
+    needs_artifacts:
+      - package
+    steps:
+      - name: deploy to staging
+        run: echo "Deploying to staging environment... (dry-run)"
+
+  - name: matrix-build
+    stage: build
+    depends_on:
+      - setup
+    timeout: 300
+    matrix:
+      os:
+        - linux
+        - macos
+      arch:
+        - amd64
+        - arm64
+    steps:
+      - name: build for matrix
+        run: |
+          echo "Building for OS=${{os}} ARCH=${{arch}}"
+          mkdir -p build/${{os}}-${{arch}}
+          echo "${{APP_NAME}}-${{VERSION}}-${{os}}-${{arch}}" > build/${{os}}-${{arch}}/binary.txt
+    artifacts:
+      - paths:
+          - build/

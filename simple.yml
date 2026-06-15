@@ -1,0 +1,28 @@
+stages:
+  - hello
+  - world
+
+variables:
+  GREETING: "Hello"
+
+jobs:
+  - name: hello-job
+    stage: hello
+    timeout: 60
+    steps:
+      - name: say hello
+        run: echo "${GREETING} from hello-job"
+      - name: set output
+        run: echo "::set-output name=msg::Hi there"
+
+  - name: world-job
+    stage: world
+    depends_on:
+      - hello-job
+    steps:
+      - name: use output
+        run: |
+          echo "Received message"
+          ls -la
+      - name: say world
+        run: echo "World!"

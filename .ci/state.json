@@ -1,0 +1,106 @@
+{
+  "pipeline_hash": "2e6ea9eb97df8c8808c860332e68eef8f78d0db05bee748b260c645a72d3a4aa",
+  "job_results": {
+    "deploy-staging": {
+      "job_name": "deploy-staging",
+      "status": "Cancelled",
+      "duration_ms": 0,
+      "retry_count": 0,
+      "message": "Cancelled by user signal",
+      "outputs": {},
+      "started_at": "2026-06-14T05:30:37.114566+08:00",
+      "finished_at": "2026-06-14T05:30:37.114566+08:00"
+    },
+    "lint": {
+      "job_name": "lint",
+      "status": "Cancelled",
+      "duration_ms": 0,
+      "retry_count": 0,
+      "message": "Cancelled by user signal",
+      "outputs": {},
+      "started_at": "2026-06-14T05:30:37.114543+08:00",
+      "finished_at": "2026-06-14T05:30:37.114561+08:00"
+    },
+    "matrix-build/arm64-macos": {
+      "job_name": "matrix-build/arm64-macos",
+      "status": "Success",
+      "duration_ms": 11,
+      "retry_count": 0,
+      "message": null,
+      "outputs": {},
+      "started_at": "2026-06-14T05:29:55.705911+08:00",
+      "finished_at": "2026-06-14T05:29:55.717134+08:00"
+    },
+    "matrix-build/amd64-macos": {
+      "job_name": "matrix-build/amd64-macos",
+      "status": "Success",
+      "duration_ms": 11,
+      "retry_count": 0,
+      "message": null,
+      "outputs": {},
+      "started_at": "2026-06-14T05:29:55.705932+08:00",
+      "finished_at": "2026-06-14T05:29:55.717133+08:00"
+    },
+    "matrix-build/amd64-linux": {
+      "job_name": "matrix-build/amd64-linux",
+      "status": "Success",
+      "duration_ms": 8,
+      "retry_count": 0,
+      "message": null,
+      "outputs": {},
+      "started_at": "2026-06-14T05:29:55.718373+08:00",
+      "finished_at": "2026-06-14T05:29:55.727058+08:00"
+    },
+    "matrix-build/arm64-linux": {
+      "job_name": "matrix-build/arm64-linux",
+      "status": "Success",
+      "duration_ms": 8,
+      "retry_count": 0,
+      "message": null,
+      "outputs": {},
+      "started_at": "2026-06-14T05:29:55.712999+08:00",
+      "finished_at": "2026-06-14T05:29:55.721323+08:00"
+    },
+    "package": {
+      "job_name": "package",
+      "status": "Cancelled",
+      "duration_ms": 0,
+      "retry_count": 0,
+      "message": "Cancelled by user signal",
+      "outputs": {},
+      "started_at": "2026-06-14T05:30:37.114562+08:00",
+      "finished_at": "2026-06-14T05:30:37.114562+08:00"
+    },
+    "test": {
+      "job_name": "test",
+      "status": "Cancelled",
+      "duration_ms": 0,
+      "retry_count": 0,
+      "message": "Cancelled by user signal",
+      "outputs": {},
+      "started_at": "2026-06-14T05:30:37.114565+08:00",
+      "finished_at": "2026-06-14T05:30:37.114565+08:00"
+    },
+    "build": {
+      "job_name": "build",
+      "status": "Failed",
+      "duration_ms": 6057,
+      "retry_count": 2,
+      "message": "Step 'compile' failed: Process exited with non-zero status code: 1",
+      "outputs": {},
+      "started_at": "2026-06-14T05:29:59.916682+08:00",
+      "finished_at": "2026-06-14T05:30:05.973836+08:00"
+    },
+    "setup": {
+      "job_name": "setup",
+      "status": "Success",
+      "duration_ms": 18,
+      "retry_count": 0,
+      "message": null,
+      "outputs": {},
+      "started_at": "2026-06-14T05:29:55.602308+08:00",
+      "finished_at": "2026-06-14T05:29:55.620809+08:00"
+    }
+  },
+  "timestamp": "2026-06-14T05:30:37.114584+08:00"
+}
