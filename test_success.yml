@@ -1,0 +1,22 @@
+stages:
+  - hello
+  - world
+
+jobs:
+  - name: hello-job
+    stage: hello
+    steps:
+      - name: say hello
+        run: echo "Hello from hello-job"
+      - name: set output
+        run: echo "::set-output name=msg::Hi there"
+
+  - name: world-job
+    stage: world
+    depends_on:
+      - hello-job
+    steps:
+      - name: use output
+        run: echo "Received message"
+      - name: say world
+        run: echo "World!"

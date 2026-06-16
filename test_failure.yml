@@ -1,0 +1,27 @@
+stages:
+  - build
+  - handle
+
+jobs:
+  - name: fail-job
+    stage: build
+    steps:
+      - name: fail on purpose
+        run: exit 1
+
+  - name: skip-job
+    stage: handle
+    depends_on:
+      - fail-job
+    steps:
+      - name: should be skipped
+        run: echo "This should never run"
+
+  - name: handle-failure-job
+    stage: handle
+    depends_on:
+      - fail-job
+    condition: failure()
+    steps:
+      - name: handle failure
+        run: echo "Handling the failure from fail-job"

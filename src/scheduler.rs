@@ -145,22 +145,18 @@ impl Scheduler {
 
         let global_lock = Arc::new(Mutex::new(()));
 
-        let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
         let cancelled_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let cancel_flag_ref = cancelled_flag.clone();
-        let _signal_handle = tokio::task::spawn_blocking(move || {
-            let sig_result = signal_hook::iterator::Signals::new(&[signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM]);
-            match sig_result {
-                Ok(mut signals) => {
-                    for _sig in signals.forever() {
+        let signal_handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
                         eprintln!("\nReceived shutdown signal. Gracefully stopping...");
                         cancel_flag_ref.store(true, std::sync::atomic::Ordering::SeqCst);
-                        let _ = cancel_tx.send(());
                         break;
                     }
                 }
-                _ => {}
             }
         });
 
@@ -247,10 +243,6 @@ impl Scheduler {
                         continue;
                     }
 
-                    if running_guard.len() + to_running.len() >= self.config.parallel {
-                        break;
-                    }
-
                     let any_failed = dag.any_dep_failed(job_name, &completed_status);
                     if any_failed {
                         let should_skip = match &job.condition {
@@ -283,6 +275,13 @@ impl Scheduler {
                                 "skipped",
                                 "Dependency failed",
                             ));
+                            continue;
+                        } else {
+                            if running_guard.len() + to_running.len() >= self.config.parallel {
+                                continue;
+                            }
+                            to_dispatch.push(job_name.clone());
+                            to_running.push(job_name.clone());
                             continue;
                         }
                     }
@@ -332,6 +331,10 @@ impl Scheduler {
                             "skipped",
                             "Condition not met",
                         ));
+                        continue;
+                    }
+
+                    if running_guard.len() + to_running.len() >= self.config.parallel {
                         continue;
                     }
 
@@ -561,6 +564,9 @@ impl Scheduler {
         for (_name, handle) in handles {
             let _ = handle.await;
         }
+
+        signal_handle.abort();
+        let _ = signal_handle.await;
 
         let final_results_map = completed.lock().await.clone();
         let mut final_results: Vec<JobResult> = Vec::new();

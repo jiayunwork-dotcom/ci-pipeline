@@ -85,7 +85,12 @@ impl Dag {
             return true;
         }
         deps.iter().all(|dep| {
-            completed.get(dep).map_or(false, |s| matches!(s, JobStatus::Success | JobStatus::Skipped))
+            completed.get(dep).map_or(false, |s| {
+                matches!(s, JobStatus::Success
+                    | JobStatus::Skipped
+                    | JobStatus::Failed
+                    | JobStatus::Cancelled)
+            })
         })
     }
 
