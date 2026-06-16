@@ -18,6 +18,53 @@ pub enum Commands {
     Validate(ValidateArgs),
     Graph(GraphArgs),
     Clean(CleanArgs),
+    Cache(CacheArgs),
+}
+
+#[derive(Debug, Parser)]
+pub struct CacheArgs {
+    #[arg(long, short = 'f', default_value = "pipeline.yml")]
+    pub file: String,
+
+    #[command(subcommand)]
+    pub command: CacheCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CacheCommands {
+    List(CacheListArgs),
+    Push(CachePushArgs),
+    Pull(CachePullArgs),
+    Gc,
+    Stats,
+}
+
+#[derive(Debug, Parser)]
+pub struct CacheListArgs {
+    #[arg(long)]
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+pub struct CachePushArgs {
+    pub path: String,
+
+    #[arg(long)]
+    pub key: String,
+
+    #[arg(long)]
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+pub struct CachePullArgs {
+    pub key: String,
+
+    #[arg(long)]
+    pub output: String,
+
+    #[arg(long)]
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -129,6 +176,7 @@ pub async fn handle_run(args: RunArgs) -> Result<()> {
         default_timeout: args.timeout,
         default_retry: args.retry,
         changed_files,
+        remote_cache: crate::models::RemoteCacheConfig::default(),
     };
 
     let scheduler = Scheduler::new(config);
@@ -325,4 +373,155 @@ pub fn handle_clean(args: CleanArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub async fn handle_cache(args: CacheArgs) -> Result<()> {
+    let pipeline_content = std::fs::read_to_string(&args.file)
+        .map_err(|e| anyhow::anyhow!("Failed to read pipeline file {}: {}", args.file, e))?;
+
+    let pipeline = crate::parser::parse_pipeline_from_str(&pipeline_content)?;
+
+    if !pipeline.remote_cache.enabled {
+        eprintln!("⚠  Remote cache is not enabled in pipeline.yml");
+    }
+
+    let default_namespace = crate::remote_cache::get_default_namespace();
+    let client = crate::remote_cache::RemoteCacheClient::new(
+        pipeline.remote_cache.clone(),
+        &default_namespace,
+    );
+
+    if !client.is_enabled() {
+        return Err(anyhow::anyhow!(
+            "Remote cache is not configured. Please set remote_cache.url in pipeline.yml"
+        ));
+    }
+
+    match args.command {
+        CacheCommands::List(list_args) => {
+            let entries = client.list_namespace(list_args.namespace.as_deref()).await?;
+            let ns = list_args.namespace.unwrap_or_else(|| client.namespace.clone());
+
+            println!("Remote Cache Entries (namespace: {})", ns);
+            println!("{}", "─".repeat(80));
+
+            if entries.is_empty() {
+                println!("  (empty)");
+            } else {
+                for entry in &entries {
+                    let size_str = format_size(entry.size_bytes);
+                    println!(
+                        "  {:<50} {:>10}  last accessed: {}",
+                        truncate_for_list(&entry.key, 48),
+                        size_str,
+                        entry.last_accessed
+                    );
+                }
+            }
+            println!();
+            println!("Total: {} entries", entries.len());
+        }
+
+        CacheCommands::Push(push_args) => {
+            let path = std::path::Path::new(&push_args.path);
+            if !path.exists() {
+                return Err(anyhow::anyhow!("File not found: {}", push_args.path));
+            }
+
+            println!("Pushing to remote cache...");
+            println!("  Key: {}", push_args.key);
+            println!("  File: {}", push_args.path);
+            if let Some(ns) = &push_args.namespace {
+                println!("  Namespace: {}", ns);
+            }
+
+            let mut client = client;
+            if let Some(ns) = push_args.namespace {
+                client.namespace = ns;
+            }
+
+            client.upload_cache(&push_args.key, path).await?;
+            println!("✓ Push successful");
+        }
+
+        CacheCommands::Pull(pull_args) => {
+            let output = std::path::Path::new(&pull_args.output);
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+
+            println!("Pulling from remote cache...");
+            println!("  Key: {}", pull_args.key);
+            println!("  Output: {}", pull_args.output);
+            if let Some(ns) = &pull_args.namespace {
+                println!("  Namespace: {}", ns);
+            }
+
+            let mut client = client;
+            if let Some(ns) = pull_args.namespace {
+                client.namespace = ns;
+            }
+
+            let success = client.download_cache(&pull_args.key, output).await?;
+            if success {
+                println!("✓ Pull successful");
+            } else {
+                println!("✗ Cache key not found");
+                std::process::exit(1);
+            }
+        }
+
+        CacheCommands::Gc => {
+            println!("Triggering garbage collection...");
+            let result = client.trigger_gc().await?;
+            println!("✓ GC complete");
+            println!("  Removed: {} entries", result.removed);
+            println!("  Freed: {}", format_size(result.freed_bytes));
+        }
+
+        CacheCommands::Stats => {
+            let stats = client.get_stats().await?;
+
+            println!("Remote Cache Statistics");
+            println!("{}", "─".repeat(80));
+            println!("  Total entries: {}", stats.total_entries);
+            println!("  Total size: {}", format_size(stats.total_size_bytes));
+            println!("  Hits (24h): {}", stats.hits_last_24h);
+            println!("  Misses (24h): {}", stats.misses_last_24h);
+            println!();
+            println!("  Namespace distribution:");
+            if stats.namespace_counts.is_empty() {
+                println!("    (none)");
+            } else {
+                for (ns, count) in &stats.namespace_counts {
+                    println!("    {}: {} entries", ns, count);
+                }
+            }
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+fn truncate_for_list(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut t: String = s.chars().take(max - 3).collect();
+        t.push_str("...");
+        t
+    }
 }

@@ -3,6 +3,7 @@ use crate::dag::*;
 use crate::executor::*;
 use crate::logging::*;
 use crate::models::*;
+use crate::remote_cache::*;
 use crate::reporting::*;
 use crate::services::*;
 use crate::state::*;
@@ -27,6 +28,7 @@ pub struct SchedulerConfig {
     pub default_timeout: u64,
     pub default_retry: u32,
     pub changed_files: Vec<String>,
+    pub remote_cache: RemoteCacheConfig,
 }
 
 impl Default for SchedulerConfig {
@@ -43,6 +45,7 @@ impl Default for SchedulerConfig {
             default_timeout: 3600,
             default_retry: 0,
             changed_files: Vec::new(),
+            remote_cache: RemoteCacheConfig::default(),
         }
     }
 }
@@ -74,6 +77,8 @@ impl Scheduler {
             }
             return Err(anyhow!("Pipeline validation failed with {} errors", errors.len()));
         }
+
+        let remote_cache_config = pipeline.remote_cache.clone();
 
         pipeline.jobs = crate::matrix::expand_matrix_jobs(pipeline.jobs);
 
@@ -135,6 +140,12 @@ impl Scheduler {
         let artifact_manager = Arc::new(ArtifactManager::new(&working_dir));
         let cache_manager = Arc::new(CacheManager::new(&working_dir, self.config.cache_ttl_days));
         let service_manager = Arc::new(Mutex::new(ServiceManager::new()));
+
+        let default_namespace = get_default_namespace();
+        let remote_cache_client = Arc::new(RemoteCacheClient::new(
+            remote_cache_config.clone(),
+            &default_namespace,
+        ));
 
         let exec_config = ExecutorConfig {
             working_dir: working_dir.clone(),
@@ -429,6 +440,7 @@ impl Scheduler {
                 let running = running.clone();
                 let pending = pending.clone();
                 let history_avg_clone = history_avg.clone();
+                let remote_cache_client = remote_cache_client.clone();
 
                 {
                     let mut js = job_statuses.lock().await;
@@ -451,9 +463,21 @@ impl Scheduler {
                             .compute_cache_key(&job.cache, &working_dir)
                             .unwrap_or_default();
                         if !cache_key.is_empty() {
-                            let _restored = cache_manager
+                            let mut restored = cache_manager
                                 .restore_cache(&cache_key, &working_dir)
                                 .unwrap_or(false);
+
+                            if !restored && remote_cache_client.is_enabled() {
+                                let remote_path = cache_manager.cache_entry_path(&cache_key);
+                                if let Ok(true) = remote_cache_client
+                                    .download_cache(&cache_key, &remote_path)
+                                    .await
+                                {
+                                    let _ = cache_manager
+                                        .restore_cache(&cache_key, &working_dir);
+                                    restored = true;
+                                }
+                            }
                         }
                     }
 
@@ -496,17 +520,35 @@ impl Scheduler {
                         }
 
                         if !job.artifacts.is_empty() {
-                            let _packaged = artifact_manager
+                            if let Some(artifact_path) = artifact_manager
                                 .package_artifacts(&job, &working_dir)
-                                .unwrap_or(None);
+                                .unwrap_or(None)
+                            {
+                                if remote_cache_client.is_enabled() {
+                                    let artifact_key = format!(
+                                        "artifact-{}-{}",
+                                        job.name,
+                                        compute_file_hash(&artifact_path).unwrap_or_default()
+                                    );
+                                    let _ = remote_cache_client
+                                        .upload_cache(&artifact_key, &artifact_path)
+                                        .await;
+                                }
+                            }
                         }
 
                         if !job.cache.is_empty() {
                             if let Ok(cache_key) = cache_manager.compute_cache_key(&job.cache, &working_dir) {
                                 if !cache_key.is_empty() {
-                                    let _saved = cache_manager
+                                    if let Ok(cache_path) = cache_manager
                                         .save_cache(&job.cache, &cache_key, &working_dir)
-                                        .ok();
+                                    {
+                                        if remote_cache_client.is_enabled() {
+                                            let _ = remote_cache_client
+                                                .upload_cache(&cache_key, &cache_path)
+                                                .await;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -628,12 +670,13 @@ impl Scheduler {
         let _ = save_history(&working_dir, &new_history);
 
         let slow_jobs = compute_slow_jobs(&final_results);
+        let remote_cache_stats = remote_cache_client.get_local_stats().await;
 
         if matches!(self.config.output_mode, OutputMode::Terminal) {
             eprint!("\r");
             eprint!("{}", " ".repeat(150));
             eprint!("\r");
-            print_summary(&final_results, &slow_jobs);
+            print_summary(&final_results, &slow_jobs, &remote_cache_stats, remote_cache_client.is_enabled());
         }
 
         if matches!(self.config.output_mode, OutputMode::Json) {
@@ -648,6 +691,7 @@ impl Scheduler {
                 "total_duration_ms": final_results.iter().map(|r| r.duration_ms).sum::<u64>(),
                 "slow_jobs": slow_jobs,
                 "job_results": final_results,
+                "remote_cache_stats": remote_cache_stats,
             });
             println!("{}", serde_json::to_string_pretty(&pipeline_complete).unwrap());
         }
@@ -867,4 +911,21 @@ fn compute_slow_jobs(results: &[JobResult]) -> Vec<SlowJobInfo> {
 
     slow.sort_by(|a, b| b.duration_ms.cmp(&a.duration_ms));
     slow
+}
+
+fn compute_file_hash(path: &std::path::Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    use std::io::Read;
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    let result = hasher.finalize();
+    Ok(format!("{:x}", result))
 }

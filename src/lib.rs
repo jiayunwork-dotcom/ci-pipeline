@@ -6,6 +6,7 @@ pub mod logging;
 pub mod matrix;
 pub mod models;
 pub mod parser;
+pub mod remote_cache;
 pub mod reporting;
 pub mod scheduler;
 pub mod services;

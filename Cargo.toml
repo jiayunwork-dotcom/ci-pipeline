@@ -9,6 +9,10 @@ license = "MIT"
 name = "ci-pipeline"
 path = "src/main.rs"
 
+[[bin]]
+name = "ci-cache-server"
+path = "src/cache_server/main.rs"
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -34,6 +38,15 @@ async-trait = "0.1"
 signal-hook = "0.3"
 signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
 dunce = "1.0"
+axum = "0.7"
+reqwest = { version = "0.12", features = ["stream", "json"] }
+tokio-util = { version = "0.7", features = ["io"] }
+toml = "0.8"
+tempfile = "3.10"
+http = "1.0"
+http-body-util = "0.1"
+bytes = "1.0"
+futures-util = "0.3"
 
 [profile.release]
 opt-level = 3

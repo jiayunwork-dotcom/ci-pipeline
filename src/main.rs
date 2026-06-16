@@ -10,5 +10,6 @@ async fn main() -> Result<()> {
         Commands::Validate(validate_args) => handle_validate(validate_args),
         Commands::Graph(graph_args) => handle_graph(graph_args),
         Commands::Clean(clean_args) => handle_clean(clean_args),
+        Commands::Cache(cache_args) => handle_cache(cache_args).await,
     }
 }

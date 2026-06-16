@@ -1,26 +1,36 @@
 {
-  "pipeline_hash": "d34c47484e6da4af9b6d2f0e868957c62000e6efba134b23b40b9106405a294c",
+  "pipeline_hash": "c6da554139aeb9a9d5fea849445ce37f6b04ddbc7e0caa657f4be4cec973da39",
   "job_results": {
-    "test-with-services": {
-      "job_name": "test-with-services",
+    "test": {
+      "job_name": "test",
       "status": "Success",
-      "duration_ms": 2403,
+      "duration_ms": 7,
       "retry_count": 0,
       "message": null,
       "outputs": {},
-      "started_at": "2026-06-16T20:24:34.597325+08:00",
-      "finished_at": "2026-06-16T20:24:37.001139+08:00"
+      "started_at": "2026-06-16T20:33:23.579805+08:00",
+      "finished_at": "2026-06-16T20:33:23.586810+08:00"
     },
-    "build-in-container": {
-      "job_name": "build-in-container",
+    "deploy": {
+      "job_name": "deploy",
       "status": "Success",
-      "duration_ms": 1370,
+      "duration_ms": 16,
       "retry_count": 0,
       "message": null,
       "outputs": {},
-      "started_at": "2026-06-16T20:24:27.314723+08:00",
-      "finished_at": "2026-06-16T20:24:28.684869+08:00"
+      "started_at": "2026-06-16T20:33:23.682138+08:00",
+      "finished_at": "2026-06-16T20:33:23.698156+08:00"
+    },
+    "build": {
+      "job_name": "build",
+      "status": "Success",
+      "duration_ms": 14,
+      "retry_count": 0,
+      "message": null,
+      "outputs": {},
+      "started_at": "2026-06-16T20:33:23.477916+08:00",
+      "finished_at": "2026-06-16T20:33:23.492482+08:00"
     }
   },
-  "timestamp": "2026-06-16T20:24:42.682720+08:00"
+  "timestamp": "2026-06-16T20:33:23.783347+08:00"
 }

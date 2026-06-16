@@ -9,7 +9,28 @@ pub struct Pipeline {
     pub stages: Vec<String>,
     #[serde(default)]
     pub trigger: Option<TriggerConfig>,
+    #[serde(default)]
+    pub remote_cache: RemoteCacheConfig,
     pub jobs: Vec<Job>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RemoteCacheConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RemoteCacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub pushes: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -1,0 +1,39 @@
+stages:
+  - build
+  - test
+
+remote_cache:
+  enabled: true
+  url: "http://localhost:9876"
+  namespace: "test-project"
+  # token: "your-secret-token"
+
+jobs:
+  - name: build
+    stage: build
+    cache:
+      - build_output/
+    artifacts:
+      - paths:
+          - build_output/
+    steps:
+      - name: create build output
+        run: |
+          mkdir -p build_output
+          echo "Build output $(date +%s)" > build_output/result.txt
+          echo "This is a cached build artifact" >> build_output/result.txt
+          echo "Build completed"
+      - name: simulate build time
+        run: sleep 2
+
+  - name: test
+    stage: test
+    depends_on: [build]
+    needs_artifacts: [build]
+    steps:
+      - name: run tests
+        run: |
+          echo "Running tests..."
+          ls -la build_output/
+          cat build_output/result.txt
+          echo "All tests passed"

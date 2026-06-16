@@ -39,7 +39,12 @@ pub fn format_duration(ms: u64) -> String {
     }
 }
 
-pub fn print_summary(results: &[JobResult], slow_jobs: &[crate::models::SlowJobInfo]) {
+pub fn print_summary(
+    results: &[JobResult],
+    slow_jobs: &[crate::models::SlowJobInfo],
+    remote_cache_stats: &crate::models::RemoteCacheStats,
+    remote_cache_enabled: bool,
+) {
     println!();
     println!("{}", "=".repeat(80).bold());
     println!("{}", "Pipeline Summary".bold());
@@ -106,6 +111,25 @@ pub fn print_summary(results: &[JobResult], slow_jobs: &[crate::models::SlowJobI
     );
     println!("Total duration: {}", format_duration(total_ms));
     println!();
+
+    if remote_cache_enabled {
+        println!("{}", "Remote Cache".bold());
+        println!("{}", "-".repeat(80));
+        println!(
+            "  Hits:    {}  |  Misses:  {}  |  Pushes:  {}",
+            remote_cache_stats.hits.to_string().green(),
+            remote_cache_stats.misses.to_string().yellow(),
+            remote_cache_stats.pushes.to_string().cyan()
+        );
+        let total_requests = remote_cache_stats.hits + remote_cache_stats.misses;
+        let hit_rate = if total_requests > 0 {
+            (remote_cache_stats.hits as f64 / total_requests as f64) * 100.0
+        } else {
+            0.0
+        };
+        println!("  Hit rate: {:.1}%", hit_rate);
+        println!();
+    }
 
     if !slow_jobs.is_empty() {
         println!("{}", "Performance Insights".bold());

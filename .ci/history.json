@@ -9,32 +9,32 @@
   {
     "timestamp": "2026-06-16T20:22:15.034795+08:00",
     "job_durations": {
-      "deploy": 434,
       "build": 139,
+      "deploy": 434,
       "test": 133
     }
   },
   {
     "timestamp": "2026-06-16T20:22:22.275606+08:00",
     "job_durations": {
-      "test": 0,
       "build": 0,
+      "test": 0,
       "deploy": 0
     }
   },
   {
     "timestamp": "2026-06-16T20:22:44.974737+08:00",
     "job_durations": {
-      "build": 54,
       "test": 103,
-      "deploy": 418
+      "deploy": 418,
+      "build": 54
     }
   },
   {
     "timestamp": "2026-06-16T20:22:53.736126+08:00",
     "job_durations": {
-      "build": 55,
       "deploy": 72,
+      "build": 55,
       "test": 43
     }
   },
@@ -43,6 +43,30 @@
     "job_durations": {
       "build-in-container": 1370,
       "test-with-services": 2403
+    }
+  },
+  {
+    "timestamp": "2026-06-16T20:33:00.265273+08:00",
+    "job_durations": {
+      "test": 8,
+      "build": 7,
+      "deploy": 12
+    }
+  },
+  {
+    "timestamp": "2026-06-16T20:33:15.769388+08:00",
+    "job_durations": {
+      "test": 0,
+      "build": 0,
+      "deploy": 0
+    }
+  },
+  {
+    "timestamp": "2026-06-16T20:33:23.783555+08:00",
+    "job_durations": {
+      "deploy": 16,
+      "test": 7,
+      "build": 14
     }
   }
 ]
