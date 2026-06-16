@@ -10,6 +10,12 @@ pub struct ValidationError {
     pub message: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct LintWarning {
+    pub location: String,
+    pub message: String,
+}
+
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[{}] {}", self.location, self.message)
@@ -284,4 +290,91 @@ fn strip_vars_and_strings(expr: &str) -> String {
         i += 1;
     }
     result
+}
+
+pub fn lint_pipeline(pipeline: &Pipeline, jobs_expanded: &[Job]) -> Result<Vec<LintWarning>> {
+    let mut warnings = Vec::new();
+
+    lint_missing_timeout(pipeline, &mut warnings);
+    lint_excessive_retry(pipeline, &mut warnings);
+    lint_missing_depends_on(pipeline, &mut warnings);
+    lint_excessive_matrix(pipeline, jobs_expanded, &mut warnings);
+
+    Ok(warnings)
+}
+
+fn lint_missing_timeout(pipeline: &Pipeline, warnings: &mut Vec<LintWarning>) {
+    for job in &pipeline.jobs {
+        if job.timeout.is_none() {
+            warnings.push(LintWarning {
+                location: format!("jobs.{}.timeout", job.name),
+                message: format!(
+                    "Job '{}' does not set a timeout. It is recommended to set a timeout to prevent stuck jobs.",
+                    job.name
+                ),
+            });
+        }
+    }
+}
+
+fn lint_excessive_retry(pipeline: &Pipeline, warnings: &mut Vec<LintWarning>) {
+    for job in &pipeline.jobs {
+        if let Some(retry) = job.retry {
+            if retry > 5 {
+                warnings.push(LintWarning {
+                    location: format!("jobs.{}.retry", job.name),
+                    message: format!(
+                        "Job '{}' has retry={} which may be excessive. Consider a value <= 5.",
+                        job.name, retry
+                    ),
+                });
+            }
+        }
+    }
+}
+
+fn lint_missing_depends_on(pipeline: &Pipeline, warnings: &mut Vec<LintWarning>) {
+    let first_stage = pipeline.stages.first().cloned();
+    for job in &pipeline.jobs {
+        if job.depends_on.is_empty() {
+            let is_first_stage = match (&job.stage, &first_stage) {
+                (Some(s), Some(f)) => s == f,
+                _ => pipeline.stages.is_empty(),
+            };
+            if !is_first_stage && !pipeline.stages.is_empty() {
+                warnings.push(LintWarning {
+                    location: format!("jobs.{}.depends_on", job.name),
+                    message: format!(
+                        "Job '{}' is in stage '{}' (not the first stage) but has no depends_on. This may be a missing dependency.",
+                        job.name,
+                        job.stage.clone().unwrap_or_else(|| "none".to_string())
+                    ),
+                });
+            }
+        }
+    }
+}
+
+fn lint_excessive_matrix(pipeline: &Pipeline, jobs_expanded: &[Job], warnings: &mut Vec<LintWarning>) {
+    for job in &pipeline.jobs {
+        if let Some(matrix) = &job.matrix {
+            let count: usize = jobs_expanded
+                .iter()
+                .filter(|j| {
+                    let original = j.env.get("ORIGINAL_JOB_NAME");
+                    let matches_name = original.map(|n| n == &job.name).unwrap_or(false);
+                    matches_name || j.name.starts_with(&format!("{}/", job.name))
+                })
+                .count();
+            if count > 20 {
+                warnings.push(LintWarning {
+                    location: format!("jobs.{}.matrix", job.name),
+                    message: format!(
+                        "Job '{}' matrix expands to {} sub-jobs (>20). This may indicate a Cartesian product explosion.",
+                        job.name, count
+                    ),
+                });
+            }
+        }
+    }
 }

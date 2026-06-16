@@ -7,7 +7,43 @@ pub struct Pipeline {
     pub variables: HashMap<String, String>,
     #[serde(default)]
     pub stages: Vec<String>,
+    #[serde(default)]
+    pub trigger: Option<TriggerConfig>,
     pub jobs: Vec<Job>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TriggerConfig {
+    #[serde(default)]
+    pub paths_include: Vec<String>,
+    #[serde(default)]
+    pub paths_exclude: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum IsolationMode {
+    None,
+    Container,
+}
+
+impl Default for IsolationMode {
+    fn default() -> Self {
+        IsolationMode::None
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub timestamp: chrono::DateTime<chrono::Local>,
+    pub job_durations: HashMap<String, u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlowJobInfo {
+    pub job_name: String,
+    pub duration_ms: u64,
+    pub percentage: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +73,10 @@ pub struct Job {
     pub needs_artifacts: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub isolation: IsolationMode,
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

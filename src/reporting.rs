@@ -39,7 +39,7 @@ pub fn format_duration(ms: u64) -> String {
     }
 }
 
-pub fn print_summary(results: &[JobResult]) {
+pub fn print_summary(results: &[JobResult], slow_jobs: &[crate::models::SlowJobInfo]) {
     println!();
     println!("{}", "=".repeat(80).bold());
     println!("{}", "Pipeline Summary".bold());
@@ -58,6 +58,8 @@ pub fn print_summary(results: &[JobResult]) {
     let mut cancelled = 0;
     let mut total_ms = 0u64;
 
+    let slow_names: std::collections::HashSet<&str> = slow_jobs.iter().map(|s| s.job_name.as_str()).collect();
+
     for (i, r) in results.iter().enumerate() {
         let msg = r.message.clone().unwrap_or_default();
         let msg_truncated = if msg.chars().count() > 40 {
@@ -67,15 +69,22 @@ pub fn print_summary(results: &[JobResult]) {
         } else {
             msg
         };
-        println!(
+        let job_name = truncate(&r.job_name, 38);
+        let is_slow = slow_names.contains(r.job_name.as_str());
+        let line = format!(
             "{:<4} {:<40} {:<12} {:<12} {:<8} {}",
             i + 1,
-            truncate(&r.job_name, 38),
+            job_name,
             format_status_colored(&r.status),
             format_duration(r.duration_ms),
             r.retry_count,
             msg_truncated
         );
+        if is_slow {
+            println!("{}", line.yellow().bold());
+        } else {
+            println!("{}", line);
+        }
         match r.status {
             JobStatus::Success => success += 1,
             JobStatus::Failed => failed += 1,
@@ -97,6 +106,21 @@ pub fn print_summary(results: &[JobResult]) {
     );
     println!("Total duration: {}", format_duration(total_ms));
     println!();
+
+    if !slow_jobs.is_empty() {
+        println!("{}", "Performance Insights".bold());
+        println!("{}", "-".repeat(80));
+        println!("⚠  Slow Jobs (duration > 2x average, marked yellow above):");
+        for s in slow_jobs {
+            println!(
+                "   - {}: {} ({:.1}% of total)",
+                s.job_name.yellow().bold(),
+                format_duration(s.duration_ms),
+                s.percentage
+            );
+        }
+        println!();
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {

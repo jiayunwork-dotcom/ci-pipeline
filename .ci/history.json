@@ -1,0 +1,48 @@
+[
+  {
+    "timestamp": "2026-06-16T20:21:45.214848+08:00",
+    "job_durations": {
+      "world-job": 766,
+      "hello-job": 1897
+    }
+  },
+  {
+    "timestamp": "2026-06-16T20:22:15.034795+08:00",
+    "job_durations": {
+      "deploy": 434,
+      "build": 139,
+      "test": 133
+    }
+  },
+  {
+    "timestamp": "2026-06-16T20:22:22.275606+08:00",
+    "job_durations": {
+      "test": 0,
+      "build": 0,
+      "deploy": 0
+    }
+  },
+  {
+    "timestamp": "2026-06-16T20:22:44.974737+08:00",
+    "job_durations": {
+      "build": 54,
+      "test": 103,
+      "deploy": 418
+    }
+  },
+  {
+    "timestamp": "2026-06-16T20:22:53.736126+08:00",
+    "job_durations": {
+      "build": 55,
+      "deploy": 72,
+      "test": 43
+    }
+  },
+  {
+    "timestamp": "2026-06-16T20:24:42.683405+08:00",
+    "job_durations": {
+      "build-in-container": 1370,
+      "test-with-services": 2403
+    }
+  }
+]

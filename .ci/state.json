@@ -1,28 +1,26 @@
 {
-  "pipeline_hash": "7a68627c7b0598eea6c9987cae1fa550fa02c6d3dfeaa62221a3b75d680aa535",
+  "pipeline_hash": "d34c47484e6da4af9b6d2f0e868957c62000e6efba134b23b40b9106405a294c",
   "job_results": {
-    "world-job": {
-      "job_name": "world-job",
+    "test-with-services": {
+      "job_name": "test-with-services",
       "status": "Success",
-      "duration_ms": 23,
+      "duration_ms": 2403,
       "retry_count": 0,
       "message": null,
       "outputs": {},
-      "started_at": "2026-06-16T14:47:50.854450+08:00",
-      "finished_at": "2026-06-16T14:47:50.877953+08:00"
+      "started_at": "2026-06-16T20:24:34.597325+08:00",
+      "finished_at": "2026-06-16T20:24:37.001139+08:00"
     },
-    "hello-job": {
-      "job_name": "hello-job",
+    "build-in-container": {
+      "job_name": "build-in-container",
       "status": "Success",
-      "duration_ms": 17,
+      "duration_ms": 1370,
       "retry_count": 0,
       "message": null,
-      "outputs": {
-        "msg": "Hi there"
-      },
-      "started_at": "2026-06-16T14:47:50.752421+08:00",
-      "finished_at": "2026-06-16T14:47:50.770166+08:00"
+      "outputs": {},
+      "started_at": "2026-06-16T20:24:27.314723+08:00",
+      "finished_at": "2026-06-16T20:24:28.684869+08:00"
     }
   },
-  "timestamp": "2026-06-16T14:47:50.956119+08:00"
+  "timestamp": "2026-06-16T20:24:42.682720+08:00"
 }

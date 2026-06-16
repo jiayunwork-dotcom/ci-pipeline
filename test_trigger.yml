@@ -1,0 +1,37 @@
+stages:
+  - build
+  - test
+  - deploy
+
+trigger:
+  paths_include:
+    - "src/**"
+    - "tests/**"
+    - "Dockerfile"
+  paths_exclude:
+    - "docs/**"
+    - "*.md"
+
+jobs:
+  - name: build
+    stage: build
+    timeout: 300
+    steps:
+      - name: build
+        run: echo "Building..."
+
+  - name: test
+    stage: test
+    depends_on: [build]
+    timeout: 300
+    steps:
+      - name: test
+        run: echo "Testing..."
+
+  - name: deploy
+    stage: deploy
+    depends_on: [test]
+    timeout: 300
+    steps:
+      - name: deploy
+        run: echo "Deploying..."

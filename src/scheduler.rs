@@ -26,6 +26,7 @@ pub struct SchedulerConfig {
     pub cache_ttl_days: i64,
     pub default_timeout: u64,
     pub default_retry: u32,
+    pub changed_files: Vec<String>,
 }
 
 impl Default for SchedulerConfig {
@@ -41,6 +42,7 @@ impl Default for SchedulerConfig {
             cache_ttl_days: 7,
             default_timeout: 3600,
             default_retry: 0,
+            changed_files: Vec::new(),
         }
     }
 }
@@ -74,6 +76,14 @@ impl Scheduler {
         }
 
         pipeline.jobs = crate::matrix::expand_matrix_jobs(pipeline.jobs);
+
+        let changed_files = self.config.changed_files.clone();
+        let trigger = pipeline.trigger.clone();
+        let skipped_by_trigger: HashSet<String> = if let Some(t) = &trigger {
+            compute_trigger_skipped_jobs(&pipeline, t, &changed_files)
+        } else {
+            HashSet::new()
+        };
 
         let mut dag = Dag::build(&pipeline.jobs)?;
         dag.topological_order()?;
@@ -110,6 +120,8 @@ impl Scheduler {
         };
 
         self.print_plan(&job_map, &execution_order, &dag, &previous_results);
+
+        let (history, history_avg) = load_history(&working_dir);
 
         if self.config.dry_run {
             println!("\n--dry-run mode: no jobs executed.");
@@ -334,6 +346,28 @@ impl Scheduler {
                         continue;
                     }
 
+                    if skipped_by_trigger.contains(job_name) {
+                        to_remove_pending.push(job_name.clone());
+                        let skipped = JobResult {
+                            job_name: job_name.clone(),
+                            status: JobStatus::Skipped,
+                            duration_ms: 0,
+                            retry_count: 0,
+                            message: Some("Trigger paths not matched".to_string()),
+                            outputs: HashMap::new(),
+                            started_at: Some(chrono::Local::now()),
+                            finished_at: Some(chrono::Local::now()),
+                        };
+                        to_skip.push((job_name.clone(), skipped));
+                        logger.emit_event(LogEvent::now(
+                            "job_skipped",
+                            job_name,
+                            "skipped",
+                            "Trigger paths not matched",
+                        ));
+                        continue;
+                    }
+
                     if running_guard.len() + to_running.len() >= self.config.parallel {
                         continue;
                     }
@@ -394,6 +428,7 @@ impl Scheduler {
                 let _event_tx = event_tx.clone();
                 let running = running.clone();
                 let pending = pending.clone();
+                let history_avg_clone = history_avg.clone();
 
                 {
                     let mut js = job_statuses.lock().await;
@@ -448,7 +483,7 @@ impl Scheduler {
                         }
                     } else {
                         executor
-                            .execute_job(&job, &resolver_for_exec, &global_lock)
+                            .execute_job(&job, &resolver_for_exec, &global_lock, &service_manager, &history_avg_clone, &logger)
                             .await
                     };
 
@@ -578,11 +613,43 @@ impl Scheduler {
 
         let _ = state_manager.save_state(&pipeline_hash, &final_results_map);
 
+        let mut new_history = history;
+        let mut job_durations: HashMap<String, u64> = HashMap::new();
+        for r in &final_results {
+            job_durations.insert(r.job_name.clone(), r.duration_ms);
+        }
+        new_history.push(HistoryEntry {
+            timestamp: chrono::Local::now(),
+            job_durations,
+        });
+        while new_history.len() > 10 {
+            new_history.remove(0);
+        }
+        let _ = save_history(&working_dir, &new_history);
+
+        let slow_jobs = compute_slow_jobs(&final_results);
+
         if matches!(self.config.output_mode, OutputMode::Terminal) {
             eprint!("\r");
             eprint!("{}", " ".repeat(150));
             eprint!("\r");
-            print_summary(&final_results);
+            print_summary(&final_results, &slow_jobs);
+        }
+
+        if matches!(self.config.output_mode, OutputMode::Json) {
+            let pipeline_complete = serde_json::json!({
+                "timestamp": chrono::Local::now().to_rfc3339(),
+                "event_type": "pipeline_complete",
+                "total_jobs": final_results.len(),
+                "success_count": final_results.iter().filter(|r| matches!(r.status, JobStatus::Success)).count(),
+                "failed_count": final_results.iter().filter(|r| matches!(r.status, JobStatus::Failed)).count(),
+                "skipped_count": final_results.iter().filter(|r| matches!(r.status, JobStatus::Skipped)).count(),
+                "cancelled_count": final_results.iter().filter(|r| matches!(r.status, JobStatus::Cancelled)).count(),
+                "total_duration_ms": final_results.iter().map(|r| r.duration_ms).sum::<u64>(),
+                "slow_jobs": slow_jobs,
+                "job_results": final_results,
+            });
+            println!("{}", serde_json::to_string_pretty(&pipeline_complete).unwrap());
         }
 
         if matches!(self.config.output_mode, OutputMode::Junit) {
@@ -649,4 +716,155 @@ fn truncate_for_plan(s: &str, max: usize) -> String {
         t.push_str("...");
         t
     }
+}
+
+fn compute_trigger_skipped_jobs(
+    pipeline: &Pipeline,
+    trigger: &TriggerConfig,
+    changed_files: &[String],
+) -> HashSet<String> {
+    let mut skipped: HashSet<String> = HashSet::new();
+    if changed_files.is_empty() {
+        return skipped;
+    }
+
+    let filtered_changed: Vec<&String> = changed_files
+        .iter()
+        .filter(|f| {
+            !trigger.paths_exclude.iter().any(|pat| {
+                glob::Pattern::new(pat)
+                    .map(|p| p.matches(f))
+                    .unwrap_or(false)
+            })
+        })
+        .collect();
+
+    if filtered_changed.is_empty() {
+        for job in &pipeline.jobs {
+            skipped.insert(job.name.clone());
+        }
+        return skipped;
+    }
+
+    let include_patterns: Vec<glob::Pattern> = trigger
+        .paths_include
+        .iter()
+        .filter_map(|pat| glob::Pattern::new(pat).ok())
+        .collect();
+
+    if include_patterns.is_empty() {
+        return skipped;
+    }
+
+    let stage_to_jobs: HashMap<String, Vec<String>> = {
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        for job in &pipeline.jobs {
+            if let Some(stage) = &job.stage {
+                map.entry(stage.clone()).or_default().push(job.name.clone());
+            }
+        }
+        map
+    };
+
+    let mut matched_stages: HashSet<String> = HashSet::new();
+    for stage in &pipeline.stages {
+        if include_patterns.iter().any(|pat| {
+            filtered_changed.iter().any(|f| pat.matches(f))
+        }) {
+            matched_stages.insert(stage.clone());
+        }
+    }
+
+    let stage_patterns: HashMap<String, Vec<glob::Pattern>> = {
+        let mut map = HashMap::new();
+        for (i, stage) in pipeline.stages.iter().enumerate() {
+            if i < trigger.paths_include.len() {
+                if let Ok(pat) = glob::Pattern::new(&trigger.paths_include[i]) {
+                    map.insert(stage.clone(), vec![pat]);
+                }
+            }
+        }
+        map
+    };
+
+    let _ = stage_patterns;
+
+    for (stage, jobs) in &stage_to_jobs {
+        let stage_has_match = include_patterns.iter().any(|pat| {
+            filtered_changed.iter().any(|f| pat.matches(f))
+        });
+        if !stage_has_match {
+            for job in jobs {
+                skipped.insert(job.clone());
+            }
+        }
+    }
+
+    skipped
+}
+
+fn load_history(working_dir: &PathBuf) -> (Vec<HistoryEntry>, HashMap<String, u64>) {
+    let ci_dir = working_dir.join(".ci");
+    let history_path = ci_dir.join("history.json");
+    let entries: Vec<HistoryEntry> = if history_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&history_path) {
+            serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let mut sum_map: HashMap<String, (u64, usize)> = HashMap::new();
+    for entry in &entries {
+        for (job, dur) in &entry.job_durations {
+            let e = sum_map.entry(job.clone()).or_insert((0, 0));
+            e.0 += dur;
+            e.1 += 1;
+        }
+    }
+
+    let avg_map: HashMap<String, u64> = sum_map
+        .into_iter()
+        .map(|(k, (sum, cnt))| (k, if cnt > 0 { sum / cnt as u64 } else { 0 }))
+        .collect();
+
+    (entries, avg_map)
+}
+
+fn save_history(working_dir: &PathBuf, history: &[HistoryEntry]) -> Result<()> {
+    let ci_dir = working_dir.join(".ci");
+    std::fs::create_dir_all(&ci_dir).ok();
+    let history_path = ci_dir.join("history.json");
+    let content = serde_json::to_string_pretty(history)?;
+    std::fs::write(&history_path, content)?;
+    Ok(())
+}
+
+fn compute_slow_jobs(results: &[JobResult]) -> Vec<SlowJobInfo> {
+    let total_ms: u64 = results.iter().map(|r| r.duration_ms).sum();
+    let count = results.iter().filter(|r| r.duration_ms > 0).count() as u64;
+    if count == 0 || total_ms == 0 {
+        return Vec::new();
+    }
+    let avg_ms = total_ms / count;
+    let threshold = avg_ms * 2;
+
+    let mut slow: Vec<SlowJobInfo> = results
+        .iter()
+        .filter(|r| r.duration_ms > threshold)
+        .map(|r| SlowJobInfo {
+            job_name: r.job_name.clone(),
+            duration_ms: r.duration_ms,
+            percentage: if total_ms > 0 {
+                (r.duration_ms as f64 / total_ms as f64) * 100.0
+            } else {
+                0.0
+            },
+        })
+        .collect();
+
+    slow.sort_by(|a, b| b.duration_ms.cmp(&a.duration_ms));
+    slow
 }

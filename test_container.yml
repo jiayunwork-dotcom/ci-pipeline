@@ -1,0 +1,31 @@
+stages:
+  - build
+  - test
+
+jobs:
+  - name: build-in-container
+    stage: build
+    isolation: container
+    image: alpine:latest
+    timeout: 60
+    steps:
+      - name: check pwd
+        run: 'echo "Current directory: $(pwd)" && ls -la'
+      - name: check env
+        run: 'echo "BUILD_ENV=$BUILD_ENV" && uname -a'
+    env:
+      BUILD_ENV: production
+
+  - name: test-with-services
+    stage: test
+    depends_on: [build-in-container]
+    timeout: 60
+    isolation: container
+    image: alpine:latest
+    services:
+      - image: redis:7-alpine
+        env:
+          REDIS_PASSWORD: test123
+    steps:
+      - name: check connectivity
+        run: 'echo "Checking services..." && sleep 2 && echo "Service check complete"'

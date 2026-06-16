@@ -73,12 +73,21 @@ pub struct RunArgs {
 
     #[arg(long, default_value_t = 0)]
     pub retry: u32,
+
+    #[arg(long)]
+    pub changed_files: Option<String>,
 }
 
 #[derive(Debug, Parser)]
 pub struct ValidateArgs {
     #[arg(long, short = 'f', default_value = "pipeline.yml")]
     pub file: String,
+
+    #[arg(long, default_value_t = false)]
+    pub lint: bool,
+
+    #[arg(long, default_value_t = false)]
+    pub strict: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -106,6 +115,8 @@ pub async fn handle_run(args: RunArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
+    let changed_files = parse_changed_files(&args.changed_files);
+
     let config = SchedulerConfig {
         file: args.file.clone(),
         parallel: args.parallel,
@@ -117,6 +128,7 @@ pub async fn handle_run(args: RunArgs) -> Result<()> {
         cache_ttl_days: 7,
         default_timeout: args.timeout,
         default_retry: args.retry,
+        changed_files,
     };
 
     let scheduler = Scheduler::new(config);
@@ -132,6 +144,27 @@ pub async fn handle_run(args: RunArgs) -> Result<()> {
         std::process::exit(130);
     }
     Ok(())
+}
+
+fn parse_changed_files(arg: &Option<String>) -> Vec<String> {
+    match arg {
+        Some(s) if s == "-" => {
+            let mut input = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut input).unwrap_or_default();
+            input
+                .split(|c| c == ',' || c == '\n' || c == ' ')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        }
+        Some(s) => {
+            s.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        }
+        None => Vec::new(),
+    }
 }
 
 pub fn handle_validate(args: ValidateArgs) -> Result<()> {
@@ -161,8 +194,27 @@ pub fn handle_validate(args: ValidateArgs) -> Result<()> {
     let dag = crate::dag::Dag::build(&jobs_expanded)?;
     let _order = dag.topological_order()?;
     println!("✓ DAG cycle check passed (no cycles detected)");
+
+    let mut lint_warnings: Vec<crate::validator::LintWarning> = Vec::new();
+    if args.lint {
+        lint_warnings = crate::validator::lint_pipeline(&pipeline, &jobs_expanded)?;
+        if lint_warnings.is_empty() {
+            println!("✓ Lint passed (no warnings)");
+        } else {
+            println!("⚠ Lint found {} warning(s):", lint_warnings.len());
+            for (i, w) in lint_warnings.iter().enumerate() {
+                println!("  {}. [warning] [{}] {}", i + 1, w.location, w.message);
+            }
+        }
+    }
+
     println!();
-    println!("Summary: Pipeline definition is valid.");
+    if args.lint && !lint_warnings.is_empty() && args.strict {
+        println!("Summary: Pipeline definition has validation errors (strict mode).");
+        std::process::exit(1);
+    } else {
+        println!("Summary: Pipeline definition is valid.");
+    }
 
     Ok(())
 }
