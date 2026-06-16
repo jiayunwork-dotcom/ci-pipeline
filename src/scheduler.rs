@@ -458,11 +458,16 @@ impl Scheduler {
                             .unwrap_or(false);
                     }
 
+                    let stable_cache_key = if !job.cache.is_empty() {
+                        Some(cache_manager.compute_stable_cache_key(&job.name, &job.cache))
+                    } else {
+                        None
+                    };
+
+                    let mut cache_restored = false;
+
                     if !job.cache.is_empty() {
-                        let cache_key = cache_manager
-                            .compute_cache_key(&job.cache, &working_dir)
-                            .unwrap_or_default();
-                        if !cache_key.is_empty() {
+                        if let Some(ref cache_key) = stable_cache_key {
                             let mut restored = cache_manager
                                 .restore_cache(&cache_key, &working_dir)
                                 .unwrap_or(false);
@@ -478,6 +483,8 @@ impl Scheduler {
                                     restored = true;
                                 }
                             }
+
+                            cache_restored = restored;
                         }
                     }
 
@@ -501,6 +508,17 @@ impl Scheduler {
                             duration_ms: 0,
                             retry_count: 0,
                             message: Some("Cancelled before start".to_string()),
+                            outputs: HashMap::new(),
+                            started_at: Some(chrono::Local::now()),
+                            finished_at: Some(chrono::Local::now()),
+                        }
+                    } else if cache_restored {
+                        JobResult {
+                            job_name: job.name.clone(),
+                            status: JobStatus::Success,
+                            duration_ms: 0,
+                            retry_count: 0,
+                            message: Some("Skipped (cache hit)".to_string()),
                             outputs: HashMap::new(),
                             started_at: Some(chrono::Local::now()),
                             finished_at: Some(chrono::Local::now()),
@@ -537,17 +555,15 @@ impl Scheduler {
                             }
                         }
 
-                        if !job.cache.is_empty() {
-                            if let Ok(cache_key) = cache_manager.compute_cache_key(&job.cache, &working_dir) {
-                                if !cache_key.is_empty() {
-                                    if let Ok(cache_path) = cache_manager
-                                        .save_cache(&job.cache, &cache_key, &working_dir)
-                                    {
-                                        if remote_cache_client.is_enabled() {
-                                            let _ = remote_cache_client
-                                                .upload_cache(&cache_key, &cache_path)
-                                                .await;
-                                        }
+                        if !job.cache.is_empty() && !cache_restored {
+                            if let Some(ref cache_key) = stable_cache_key {
+                                if let Ok(cache_path) = cache_manager
+                                    .save_cache(&job.cache, &cache_key, &working_dir)
+                                {
+                                    if remote_cache_client.is_enabled() {
+                                        let _ = remote_cache_client
+                                            .upload_cache(&cache_key, &cache_path)
+                                            .await;
                                     }
                                 }
                             }

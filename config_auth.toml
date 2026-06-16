@@ -1,0 +1,5 @@
+listen_addr = "127.0.0.1:9876"
+storage_dir = "./storage"
+max_size_mb = 500
+ttl_days = 7
+auth_token = "my-secret-token"

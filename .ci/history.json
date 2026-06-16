@@ -1,25 +1,18 @@
 [
   {
-    "timestamp": "2026-06-16T20:21:45.214848+08:00",
-    "job_durations": {
-      "world-job": 766,
-      "hello-job": 1897
-    }
-  },
-  {
     "timestamp": "2026-06-16T20:22:15.034795+08:00",
     "job_durations": {
       "build": 139,
-      "deploy": 434,
-      "test": 133
+      "test": 133,
+      "deploy": 434
     }
   },
   {
     "timestamp": "2026-06-16T20:22:22.275606+08:00",
     "job_durations": {
       "build": 0,
-      "test": 0,
-      "deploy": 0
+      "deploy": 0,
+      "test": 0
     }
   },
   {
@@ -33,9 +26,9 @@
   {
     "timestamp": "2026-06-16T20:22:53.736126+08:00",
     "job_durations": {
-      "deploy": 72,
       "build": 55,
-      "test": 43
+      "test": 43,
+      "deploy": 72
     }
   },
   {
@@ -49,24 +42,38 @@
     "timestamp": "2026-06-16T20:33:00.265273+08:00",
     "job_durations": {
       "test": 8,
-      "build": 7,
-      "deploy": 12
+      "deploy": 12,
+      "build": 7
     }
   },
   {
     "timestamp": "2026-06-16T20:33:15.769388+08:00",
     "job_durations": {
-      "test": 0,
       "build": 0,
-      "deploy": 0
+      "deploy": 0,
+      "test": 0
     }
   },
   {
     "timestamp": "2026-06-16T20:33:23.783555+08:00",
     "job_durations": {
+      "build": 14,
       "deploy": 16,
-      "test": 7,
-      "build": 14
+      "test": 7
+    }
+  },
+  {
+    "timestamp": "2026-06-16T21:56:30.761736+08:00",
+    "job_durations": {
+      "build": 2057,
+      "test": 47
+    }
+  },
+  {
+    "timestamp": "2026-06-16T21:56:41.860581+08:00",
+    "job_durations": {
+      "test": 47,
+      "build": 2057
     }
   }
 ]

@@ -224,6 +224,19 @@ impl CacheManager {
         Ok(format!("{:x}", result))
     }
 
+    pub fn compute_stable_cache_key(&self, job_name: &str, paths: &[String]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(job_name.as_bytes());
+        let mut sorted_paths = paths.to_vec();
+        sorted_paths.sort();
+        for p in sorted_paths {
+            hasher.update(p.as_bytes());
+        }
+        let result = hasher.finalize();
+        let hex_full = format!("{:x}", result);
+        format!("cache-{}-{}", job_name.replace('/', "_").replace(' ', "_"), &hex_full[..16])
+    }
+
     pub fn cache_entry_path(&self, cache_key: &str) -> PathBuf {
         self.cache_dir().join(format!("{}.tar.gz", cache_key))
     }

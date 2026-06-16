@@ -559,8 +559,12 @@ async fn list_namespace(
         while let Ok(Some(entry)) = read_dir.next_entry().await {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("gz") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    let key = stem.to_string();
+                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                    let key = file_name
+                        .strip_suffix(".tar.gz")
+                        .or_else(|| file_name.strip_suffix(".gz"))
+                        .unwrap_or(file_name)
+                        .to_string();
                     let meta_path = namespace_dir.join(format!("{}.meta.json", key));
 
                     let size = if let Ok(meta) = fs::metadata(&path).await {

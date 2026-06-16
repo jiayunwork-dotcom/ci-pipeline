@@ -20,11 +20,12 @@ jobs:
       - name: create build output
         run: |
           mkdir -p build_output
-          echo "Build output $(date +%s)" > build_output/result.txt
+          echo "Build output v1" > build_output/result.txt
           echo "This is a cached build artifact" >> build_output/result.txt
+          echo "Stable content for cache testing" >> build_output/result.txt
           echo "Build completed"
       - name: simulate build time
-        run: sleep 2
+        run: sleep 3
 
   - name: test
     stage: test

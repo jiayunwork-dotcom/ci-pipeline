@@ -50,7 +50,7 @@ mkdir -p "$STORAGE_DIR"
 
 # Create server config
 cat > /tmp/cache-server-config.toml <<EOF
-listen_addr = "0.0.0.0:$SERVER_PORT"
+listen_addr = "127.0.0.1:$SERVER_PORT"
 storage_dir = "$STORAGE_DIR"
 max_size_mb = 500
 ttl_days = 7
@@ -64,16 +64,27 @@ echo ""
 
 # Start the cache server
 echo -e "${YELLOW}Step 3: Starting ci-cache-server...${NC}"
-cargo run --bin ci-cache-server -- --config /tmp/cache-server-config.toml &
+cargo run --bin ci-cache-server -- --config /tmp/cache-server-config.toml > /tmp/ci-cache-server.log 2>&1 &
 SERVER_PID=$!
 
 # Wait for server to start
-sleep 2
+sleep 3
 if ! kill -0 $SERVER_PID 2>/dev/null; then
     echo -e "${RED}✗ Failed to start cache server${NC}"
+    cat /tmp/ci-cache-server.log
     exit 1
 fi
 echo -e "${GREEN}✓ Cache server started (PID: $SERVER_PID)${NC}"
+echo ""
+
+# Verify server is responding
+echo -e "${YELLOW}Step 3.1: Verifying server is running...${NC}"
+STATS=$(curl -s "$SERVER_URL/stats" || echo "FAILED")
+if [ "$STATS" = "FAILED" ]; then
+    echo -e "${RED}✗ Server not responding${NC}"
+    exit 1
+fi
+echo "Server stats: $STATS"
 echo ""
 
 # First run - cache miss
@@ -96,12 +107,20 @@ fi
 
 echo ""
 echo -e "${GREEN}✓ First run completed in ${FIRST_DURATION}ms${NC}"
+
+# Verify build actually executed (not skipped)
+if grep -q "Skipped (cache hit)" "$TEST_DIR/first_run.log"; then
+    echo -e "${RED}✗ First run should not have cache hit!${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ First run executed build normally (no cache hit expected)${NC}"
 echo ""
 
 # Check that cache was pushed to remote
 echo -e "${YELLOW}Step 5: Verifying cache was pushed to remote...${NC}"
 echo ""
-cargo run --manifest-path "$PWD/Cargo.toml" --bin ci-pipeline -- cache -f "$TEST_DIR/pipeline.yml" list 2>&1
+LIST_OUTPUT=$(cargo run --manifest-path "$PWD/Cargo.toml" --bin ci-pipeline -- cache -f "$TEST_DIR/pipeline.yml" list 2>&1)
+echo "$LIST_OUTPUT"
 echo ""
 
 # Check storage directory
@@ -116,17 +135,24 @@ else
     echo -e "${RED}✗ No cache entries found in remote storage${NC}"
     exit 1
 fi
+
+# Verify list returns proper key names (without .tar.gz suffix)
+if echo "$LIST_OUTPUT" | grep -q "\.tar"; then
+    echo -e "${RED}✗ List returned key with .tar suffix - key naming inconsistent!${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ List returns clean key names (no .tar suffix)${NC}"
 echo ""
 
-# Clean local cache and artifacts
+# Clean local cache and artifacts to simulate fresh environment
 echo -e "${YELLOW}Step 6: Cleaning local cache (simulating fresh environment)...${NC}"
 rm -rf "$TEST_DIR/.ci"
 rm -rf "$TEST_DIR/build_output"
 echo -e "${GREEN}✓ Local cache cleaned${NC}"
 echo ""
 
-# Second run - should hit remote cache
-echo -e "${YELLOW}Step 7: Second pipeline execution (remote cache hit)...${NC}"
+# Second run - should hit remote cache and SKIP build
+echo -e "${YELLOW}Step 7: Second pipeline execution (remote cache hit → should skip build)...${NC}"
 echo ""
 
 cd "$TEST_DIR"
@@ -147,17 +173,37 @@ echo ""
 echo -e "${GREEN}✓ Second run completed in ${SECOND_DURATION}ms${NC}"
 echo ""
 
+# Verify cache hit - build job was skipped
+if grep -q "Skipped (cache hit)" "$TEST_DIR/second_run.log"; then
+    echo -e "${GREEN}✓ Cache hit verified! Build job was skipped with 'Skipped (cache hit)' message${NC}"
+else
+    echo -e "${RED}✗ Cache hit NOT detected! Build job should have been skipped${NC}"
+    echo "Second run output:"
+    cat "$TEST_DIR/second_run.log"
+    exit 1
+fi
+
+# Verify build_output exists (restored from cache)
+if [ -f "$TEST_DIR/build_output/result.txt" ]; then
+    echo -e "${GREEN}✓ build_output/result.txt restored from cache${NC}"
+    cat "$TEST_DIR/build_output/result.txt"
+else
+    echo -e "${RED}✗ build_output/result.txt missing - cache restore failed!${NC}"
+    exit 1
+fi
+echo ""
+
 # Compare durations
 echo -e "${YELLOW}Step 8: Comparing execution times...${NC}"
-echo "  First run (cache miss):  ${FIRST_DURATION}ms"
-echo "  Second run (cache hit):   ${SECOND_DURATION}ms"
+echo "  First run (cache miss + build):  ${FIRST_DURATION}ms"
+echo "  Second run (cache hit + skip):    ${SECOND_DURATION}ms"
 echo ""
 
 if [ $SECOND_DURATION -lt $FIRST_DURATION ]; then
     SPEEDUP=$(( FIRST_DURATION - SECOND_DURATION ))
     echo -e "${GREEN}✓ Second run was faster by ${SPEEDUP}ms - remote cache is working!${NC}"
 else
-    echo -e "${YELLOW}⚠ Second run was not faster (could be due to other factors)${NC}"
+    echo -e "${YELLOW}⚠ Second run was not dramatically faster (could be due to other factors)${NC}"
 fi
 echo ""
 
@@ -184,6 +230,15 @@ echo "Manual cache test content" > /tmp/test_cache_file.txt
 cargo run --manifest-path "$PWD/Cargo.toml" --bin ci-pipeline -- cache -f "$TEST_DIR/pipeline.yml" push /tmp/test_cache_file.txt --key=manual-test-key 2>&1
 echo ""
 
+# Verify push via list
+LIST_AFTER_PUSH=$(cargo run --manifest-path "$PWD/Cargo.toml" --bin ci-pipeline -- cache -f "$TEST_DIR/pipeline.yml" list 2>&1)
+if echo "$LIST_AFTER_PUSH" | grep -q "manual-test-key"; then
+    echo -e "${GREEN}✓ Manual push verified via list command${NC}"
+else
+    echo -e "${RED}✗ Manual push not found in list!${NC}"
+    exit 1
+fi
+
 # Pull manually
 cargo run --manifest-path "$PWD/Cargo.toml" --bin ci-pipeline -- cache -f "$TEST_DIR/pipeline.yml" pull manual-test-key --output=/tmp/pulled_cache_file.txt 2>&1
 echo ""
@@ -206,7 +261,9 @@ echo ""
 echo "Summary:"
 echo "  ✓ Remote cache server started successfully"
 echo "  ✓ Cache entries are pushed to remote storage"
-echo "  ✓ Cache can be pulled from remote storage"
+echo "  ✓ List returns correct key names (no .tar suffix)"
+echo "  ✓ Remote cache hit: build job skipped with 'Skipped (cache hit)'"
+echo "  ✓ Cached files are properly restored"
 echo "  ✓ Cache stats endpoint works"
 echo "  ✓ Garbage collection works"
 echo "  ✓ Manual push/pull commands work"
