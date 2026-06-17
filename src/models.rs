@@ -31,6 +31,7 @@ pub struct RemoteCacheStats {
     pub hits: u64,
     pub misses: u64,
     pub pushes: u64,
+    pub evictions: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

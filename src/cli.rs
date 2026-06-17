@@ -403,7 +403,7 @@ pub async fn handle_cache(args: CacheArgs) -> Result<()> {
             let ns = list_args.namespace.unwrap_or_else(|| client.namespace.clone());
 
             println!("Remote Cache Entries (namespace: {})", ns);
-            println!("{}", "─".repeat(80));
+            println!("{}", "─".repeat(100));
 
             if entries.is_empty() {
                 println!("  (empty)");
@@ -411,9 +411,12 @@ pub async fn handle_cache(args: CacheArgs) -> Result<()> {
                 for entry in &entries {
                     let size_str = format_size(entry.size_bytes);
                     println!(
-                        "  {:<50} {:>10}  last accessed: {}",
-                        truncate_for_list(&entry.key, 48),
+                        "  {:<40} {:>10}  accesses:{:>5}  by:{:<15} last by:{:<15} last access: {}",
+                        truncate_for_list(&entry.key, 38),
                         size_str,
+                        entry.access_count,
+                        truncate_for_list(&entry.created_by, 13),
+                        truncate_for_list(&entry.last_accessed_by, 13),
                         entry.last_accessed
                     );
                 }
@@ -488,6 +491,7 @@ pub async fn handle_cache(args: CacheArgs) -> Result<()> {
             println!("  Total size: {}", format_size(stats.total_size_bytes));
             println!("  Hits (24h): {}", stats.hits_last_24h);
             println!("  Misses (24h): {}", stats.misses_last_24h);
+            println!("  Evictions (24h): {}", stats.evictions_last_24h);
             println!();
             println!("  Namespace distribution:");
             if stats.namespace_counts.is_empty() {

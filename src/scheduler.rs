@@ -686,6 +686,7 @@ impl Scheduler {
         let _ = save_history(&working_dir, &new_history);
 
         let slow_jobs = compute_slow_jobs(&final_results);
+        let _ = remote_cache_client.fetch_and_update_evictions().await;
         let remote_cache_stats = remote_cache_client.get_local_stats().await;
 
         if matches!(self.config.output_mode, OutputMode::Terminal) {

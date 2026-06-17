@@ -1,2 +1,3 @@
-Build output 1781618199
+Build output v1
 This is a cached build artifact
+Stable content for cache testing

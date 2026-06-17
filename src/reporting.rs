@@ -116,10 +116,11 @@ pub fn print_summary(
         println!("{}", "Remote Cache".bold());
         println!("{}", "-".repeat(80));
         println!(
-            "  Hits:    {}  |  Misses:  {}  |  Pushes:  {}",
+            "  Hits:    {}  |  Misses:  {}  |  Pushes:  {}  |  Evictions:  {}",
             remote_cache_stats.hits.to_string().green(),
             remote_cache_stats.misses.to_string().yellow(),
-            remote_cache_stats.pushes.to_string().cyan()
+            remote_cache_stats.pushes.to_string().cyan(),
+            remote_cache_stats.evictions.to_string().magenta()
         );
         let total_requests = remote_cache_stats.hits + remote_cache_stats.misses;
         let hit_rate = if total_requests > 0 {

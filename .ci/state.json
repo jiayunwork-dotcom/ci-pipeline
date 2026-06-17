@@ -1,26 +1,26 @@
 {
-  "pipeline_hash": "766615e56584aec97cef6564db72221e4c2428b4b8749ff6bd05f689ba501861",
+  "pipeline_hash": "b9970c9b52be04c1c32031791485dc0d3d78680e5404ed03ea7ff1597efe563e",
   "job_results": {
     "test": {
       "job_name": "test",
       "status": "Success",
-      "duration_ms": 47,
+      "duration_ms": 44,
       "retry_count": 0,
       "message": null,
       "outputs": {},
-      "started_at": "2026-06-16T21:56:41.758986+08:00",
-      "finished_at": "2026-06-16T21:56:41.806084+08:00"
+      "started_at": "2026-06-17T00:45:12.588675+08:00",
+      "finished_at": "2026-06-17T00:45:12.633064+08:00"
     },
     "build": {
       "job_name": "build",
       "status": "Success",
-      "duration_ms": 2057,
+      "duration_ms": 0,
       "retry_count": 0,
-      "message": null,
+      "message": "Skipped (cache hit)",
       "outputs": {},
-      "started_at": "2026-06-16T21:56:39.617095+08:00",
-      "finished_at": "2026-06-16T21:56:41.674950+08:00"
+      "started_at": "2026-06-17T00:45:12.521950+08:00",
+      "finished_at": "2026-06-17T00:45:12.522004+08:00"
     }
   },
-  "timestamp": "2026-06-16T21:56:41.860207+08:00"
+  "timestamp": "2026-06-17T00:45:12.690345+08:00"
 }

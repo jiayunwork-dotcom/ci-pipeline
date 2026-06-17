@@ -10,7 +10,7 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, File, OpenOptions};
@@ -37,6 +37,10 @@ struct ServerConfig {
     ttl_days: i64,
     #[serde(default)]
     auth_token: Option<String>,
+    #[serde(default = "default_per_namespace_max_mb")]
+    per_namespace_max_mb: u64,
+    #[serde(default)]
+    namespace_tokens: HashMap<String, String>,
 }
 
 fn default_listen_addr() -> String {
@@ -55,6 +59,10 @@ fn default_ttl_days() -> i64 {
     7
 }
 
+fn default_per_namespace_max_mb() -> u64 {
+    200
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -63,7 +71,15 @@ impl Default for ServerConfig {
             max_size_mb: default_max_size_mb(),
             ttl_days: default_ttl_days(),
             auth_token: None,
+            per_namespace_max_mb: default_per_namespace_max_mb(),
+            namespace_tokens: HashMap::new(),
         }
+    }
+}
+
+impl ServerConfig {
+    fn has_any_token(&self) -> bool {
+        self.auth_token.is_some() || !self.namespace_tokens.is_empty()
     }
 }
 
@@ -71,7 +87,24 @@ impl Default for ServerConfig {
 struct AppState {
     config: ServerConfig,
     storage_dir: PathBuf,
-    stats: Arc<Mutex<CacheStats>>,
+    stats: Arc<Mutex<CacheStatsInner>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EvictionEvent {
+    timestamp: DateTime<Utc>,
+    keys: Vec<String>,
+    freed_bytes: u64,
+}
+
+#[derive(Debug, Default, Clone)]
+struct CacheStatsInner {
+    total_entries: usize,
+    total_size_bytes: u64,
+    hits_last_24h: u64,
+    misses_last_24h: u64,
+    namespace_counts: HashMap<String, usize>,
+    evictions: VecDeque<EvictionEvent>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -81,6 +114,26 @@ struct CacheStats {
     hits_last_24h: u64,
     misses_last_24h: u64,
     namespace_counts: HashMap<String, usize>,
+    evictions_last_24h: u64,
+}
+
+impl From<CacheStatsInner> for CacheStats {
+    fn from(inner: CacheStatsInner) -> Self {
+        let cutoff = Utc::now() - Duration::hours(24);
+        let evictions_last_24h = inner
+            .evictions
+            .iter()
+            .filter(|e| e.timestamp >= cutoff)
+            .count() as u64;
+        Self {
+            total_entries: inner.total_entries,
+            total_size_bytes: inner.total_size_bytes,
+            hits_last_24h: inner.hits_last_24h,
+            misses_last_24h: inner.misses_last_24h,
+            namespace_counts: inner.namespace_counts,
+            evictions_last_24h,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -88,6 +141,9 @@ struct CacheEntryInfo {
     key: String,
     size_bytes: u64,
     last_accessed: String,
+    created_by: String,
+    access_count: u64,
+    last_accessed_by: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -110,13 +166,15 @@ async fn main() -> Result<()> {
     println!("  Listen address: {}", config.listen_addr);
     println!("  Storage directory: {}", storage_dir.display());
     println!("  Max cache size: {} MB", config.max_size_mb);
+    println!("  Per-namespace max cache size: {} MB", config.per_namespace_max_mb);
     println!("  TTL: {} days", config.ttl_days);
-    println!("  Auth token: {}", if config.auth_token.is_some() { "enabled" } else { "disabled" });
+    println!("  Global auth token: {}", if config.auth_token.is_some() { "enabled" } else { "disabled" });
+    println!("  Namespace tokens: {} namespace(s)", config.namespace_tokens.len());
 
     let state = AppState {
         config: config.clone(),
         storage_dir: storage_dir.clone(),
-        stats: Arc::new(Mutex::new(CacheStats::default())),
+        stats: Arc::new(Mutex::new(CacheStatsInner::default())),
     };
 
     refresh_stats(&state).await?;
@@ -150,28 +208,52 @@ fn load_config(path: &str) -> Result<ServerConfig> {
     }
 }
 
-fn check_auth(headers: &HeaderMap, expected_token: &Option<String>) -> bool {
-    match expected_token {
-        None => true,
-        Some(token) => {
-            if let Some(auth_header) = headers.get(header::AUTHORIZATION) {
-                if let Ok(auth_str) = auth_header.to_str() {
-                    if let Some(provided) = auth_str.strip_prefix("Bearer ") {
-                        return provided == token;
-                    }
-                }
-            }
-            false
+fn check_auth(headers: &HeaderMap, config: &ServerConfig, namespace: Option<&str>) -> Result<(), Response> {
+    if !config.has_any_token() {
+        return Ok(());
+    }
+
+    let provided_token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+
+    let provided_token = match provided_token {
+        Some(t) => t,
+        None => return Err(forbidden_response()),
+    };
+
+    if let Some(global) = &config.auth_token {
+        if &provided_token == global {
+            return Ok(());
         }
     }
+
+    if let Some(ns) = namespace {
+        if let Some(ns_token) = config.namespace_tokens.get(ns) {
+            if &provided_token == ns_token {
+                return Ok(());
+            }
+        }
+    }
+
+    Err(forbidden_response())
 }
 
-fn auth_required_response() -> Response {
+fn forbidden_response() -> Response {
     (
-        StatusCode::UNAUTHORIZED,
-        [(header::WWW_AUTHENTICATE, "Bearer realm=\"ci-cache\"")],
-        "Unauthorized",
+        StatusCode::FORBIDDEN,
+        "Forbidden: Invalid or missing authorization token",
     ).into_response()
+}
+
+fn get_client_id(headers: &HeaderMap) -> String {
+    headers
+        .get("X-Client-ID")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "anonymous".to_string())
 }
 
 async fn put_cache(
@@ -180,9 +262,11 @@ async fn put_cache(
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    if !check_auth(&headers, &state.config.auth_token) {
-        return auth_required_response();
+    if let Err(resp) = check_auth(&headers, &state.config, Some(&namespace)) {
+        return resp;
     }
+
+    let client_id = get_client_id(&headers);
 
     let namespace_dir = state.storage_dir.join(&namespace);
     if let Err(e) = fs::create_dir_all(&namespace_dir).await {
@@ -208,6 +292,7 @@ async fn put_cache(
             range,
             body,
             max_size_bytes,
+            &client_id,
         ).await;
     }
 
@@ -237,6 +322,9 @@ async fn put_cache(
             "created_at": Utc::now().to_rfc3339(),
             "last_accessed": Utc::now().to_rfc3339(),
             "size_bytes": body_data.len(),
+            "created_by": client_id,
+            "access_count": 0,
+            "last_accessed_by": client_id,
         });
         fs::write(&meta_path, metadata.to_string()).await
             .map_err(|e| anyhow!("Failed to write metadata: {}", e))?;
@@ -247,6 +335,7 @@ async fn put_cache(
     match result {
         Ok(()) => {
             let _ = refresh_stats(&state).await;
+            let _ = run_eviction_if_needed(&state, &namespace).await;
             (StatusCode::OK, Json(serde_json::json!({ "status": "ok", "key": key, "namespace": namespace }))).into_response()
         }
         Err(e) => {
@@ -266,6 +355,7 @@ async fn handle_chunked_upload(
     range: &str,
     body: Body,
     max_size_bytes: u64,
+    client_id: &str,
 ) -> Response {
     let (start, end, total) = match parse_content_range(range) {
         Some(v) => v,
@@ -314,6 +404,9 @@ async fn handle_chunked_upload(
                         "created_at": Utc::now().to_rfc3339(),
                         "last_accessed": Utc::now().to_rfc3339(),
                         "size_bytes": file_size,
+                        "created_by": client_id,
+                        "access_count": 0,
+                        "last_accessed_by": client_id,
                     });
                     fs::write(meta_path, metadata.to_string()).await
                         .map_err(|e| anyhow!("Failed to write metadata: {}", e))?;
@@ -336,6 +429,7 @@ async fn handle_chunked_upload(
         Ok((chunk_size, is_complete)) => {
             if is_complete {
                 let _ = refresh_stats(state).await;
+                let _ = run_eviction_if_needed(state, namespace).await;
             }
             (StatusCode::OK, Json(serde_json::json!({
                 "status": if is_complete { "completed" } else { "chunk_received" },
@@ -377,9 +471,11 @@ async fn get_cache(
     Path((namespace, key)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    if !check_auth(&headers, &state.config.auth_token) {
-        return auth_required_response();
+    if let Err(resp) = check_auth(&headers, &state.config, Some(&namespace)) {
+        return resp;
     }
+
+    let client_id = get_client_id(&headers);
 
     let cache_path = state.storage_dir.join(&namespace).join(format!("{}.tar.gz", key));
     let meta_path = state.storage_dir.join(&namespace).join(format!("{}.meta.json", key));
@@ -398,6 +494,11 @@ async fn get_cache(
         if let Ok(meta_str) = fs::read_to_string(&meta_path).await {
             if let Ok(mut meta) = serde_json::from_str::<serde_json::Value>(&meta_str) {
                 meta["last_accessed"] = serde_json::Value::String(Utc::now().to_rfc3339());
+                let current_count = meta.get("access_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                meta["access_count"] = serde_json::Value::Number(serde_json::Number::from(current_count + 1));
+                meta["last_accessed_by"] = serde_json::Value::String(client_id.clone());
                 let _ = fs::write(&meta_path, meta.to_string()).await;
             }
         }
@@ -513,8 +614,8 @@ async fn delete_cache(
     Path((namespace, key)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    if !check_auth(&headers, &state.config.auth_token) {
-        return auth_required_response();
+    if let Err(resp) = check_auth(&headers, &state.config, Some(&namespace)) {
+        return resp;
     }
 
     let cache_path = state.storage_dir.join(&namespace).join(format!("{}.tar.gz", key));
@@ -543,8 +644,8 @@ async fn list_namespace(
     Path(namespace): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if !check_auth(&headers, &state.config.auth_token) {
-        return auth_required_response();
+    if let Err(resp) = check_auth(&headers, &state.config, Some(&namespace)) {
+        return resp;
     }
 
     let namespace_dir = state.storage_dir.join(&namespace);
@@ -573,27 +674,42 @@ async fn list_namespace(
                         0
                     };
 
-                    let last_accessed = if meta_path.exists() {
+                    let (last_accessed, created_by, access_count, last_accessed_by) = if meta_path.exists() {
                         if let Ok(meta_str) = fs::read_to_string(&meta_path).await {
                             if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_str) {
-                                meta.get("last_accessed")
+                                let last = meta.get("last_accessed")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("unknown")
-                                    .to_string()
+                                    .to_string();
+                                let cb = meta.get("created_by")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                let ac = meta.get("access_count")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let lab = meta.get("last_accessed_by")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                (last, cb, ac, lab)
                             } else {
-                                "unknown".to_string()
+                                ("unknown".to_string(), "unknown".to_string(), 0, "unknown".to_string())
                             }
                         } else {
-                            "unknown".to_string()
+                            ("unknown".to_string(), "unknown".to_string(), 0, "unknown".to_string())
                         }
                     } else {
-                        "unknown".to_string()
+                        ("unknown".to_string(), "unknown".to_string(), 0, "unknown".to_string())
                     };
 
                     entries.push(CacheEntryInfo {
                         key,
                         size_bytes: size,
                         last_accessed,
+                        created_by,
+                        access_count,
+                        last_accessed_by,
                     });
                 }
             }
@@ -609,8 +725,8 @@ async fn run_gc(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if !check_auth(&headers, &state.config.auth_token) {
-        return auth_required_response();
+    if let Err(resp) = check_auth(&headers, &state.config, None) {
+        return resp;
     }
 
     let ttl = Duration::days(state.config.ttl_days);
@@ -661,11 +777,12 @@ async fn get_stats(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if !check_auth(&headers, &state.config.auth_token) {
-        return auth_required_response();
+    if let Err(resp) = check_auth(&headers, &state.config, None) {
+        return resp;
     }
 
-    let stats = state.stats.lock().await.clone();
+    let inner = state.stats.lock().await.clone();
+    let stats: CacheStats = inner.into();
     (StatusCode::OK, Json(stats)).into_response()
 }
 
@@ -674,6 +791,9 @@ async fn refresh_stats(state: &AppState) -> Result<()> {
     stats.total_entries = 0;
     stats.total_size_bytes = 0;
     stats.namespace_counts.clear();
+
+    let cutoff = Utc::now() - Duration::hours(24);
+    stats.evictions.retain(|e| e.timestamp >= cutoff);
 
     if state.storage_dir.exists() {
         for entry in WalkDir::new(&state.storage_dir).into_iter().filter_map(|e| e.ok()) {
@@ -692,6 +812,123 @@ async fn refresh_stats(state: &AppState) -> Result<()> {
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct NamespaceEntryMeta {
+    key: String,
+    last_accessed: DateTime<Utc>,
+    size_bytes: u64,
+    cache_path: PathBuf,
+    meta_path: PathBuf,
+}
+
+async fn run_eviction_if_needed(state: &AppState, namespace: &str) -> Result<()> {
+    let max_bytes = state.config.per_namespace_max_mb * 1024 * 1024;
+    let target_bytes = (max_bytes as f64 * 0.8) as u64;
+
+    let namespace_dir = state.storage_dir.join(namespace);
+    if !namespace_dir.exists() {
+        return Ok(());
+    }
+
+    let mut entries: Vec<NamespaceEntryMeta> = Vec::new();
+    let mut total_size: u64 = 0;
+
+    if let Ok(read_dir) = fs::read_dir(&namespace_dir).await {
+        let mut read_dir = read_dir;
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("gz") {
+                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                    let key = file_name
+                        .strip_suffix(".tar.gz")
+                        .or_else(|| file_name.strip_suffix(".gz"))
+                        .unwrap_or(file_name)
+                        .to_string();
+                    let meta_path = namespace_dir.join(format!("{}.meta.json", key));
+
+                    let size = if let Ok(meta) = fs::metadata(&path).await {
+                        meta.len()
+                    } else {
+                        0
+                    };
+                    total_size += size;
+
+                    let last_accessed = if meta_path.exists() {
+                        if let Ok(meta_str) = fs::read_to_string(&meta_path).await {
+                            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_str) {
+                                meta.get("last_accessed")
+                                    .and_then(|v| v.as_str())
+                                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                                    .map(|d| d.with_timezone(&Utc))
+                                    .unwrap_or_else(|| Utc::now())
+                            } else {
+                                Utc::now()
+                            }
+                        } else {
+                            Utc::now()
+                        }
+                    } else {
+                        Utc::now()
+                    };
+
+                    entries.push(NamespaceEntryMeta {
+                        key,
+                        last_accessed,
+                        size_bytes: size,
+                        cache_path: path,
+                        meta_path,
+                    });
+                }
+            }
+        }
+    }
+
+    if total_size <= max_bytes {
+        return Ok(());
+    }
+
+    entries.sort_by(|a, b| a.last_accessed.cmp(&b.last_accessed));
+
+    let mut evicted_keys: Vec<String> = Vec::new();
+    let mut freed: u64 = 0;
+
+    for entry in &entries {
+        if total_size - freed <= target_bytes {
+            break;
+        }
+
+        if fs::remove_file(&entry.cache_path).await.is_ok() {
+            freed += entry.size_bytes;
+            evicted_keys.push(entry.key.clone());
+        }
+        let _ = fs::remove_file(&entry.meta_path).await;
+    }
+
+    if !evicted_keys.is_empty() {
+        println!(
+            "[EVICTION] namespace={} evicted_keys={:?} freed_bytes={} ({} MB)",
+            namespace,
+            evicted_keys,
+            freed,
+            freed / (1024 * 1024)
+        );
+
+        let mut stats = state.stats.lock().await;
+        stats.evictions.push_back(EvictionEvent {
+            timestamp: Utc::now(),
+            keys: evicted_keys,
+            freed_bytes: freed,
+        });
+        let cutoff = Utc::now() - Duration::hours(24);
+        stats.evictions.retain(|e| e.timestamp >= cutoff);
+        drop(stats);
+
+        let _ = refresh_stats(state).await;
     }
 
     Ok(())

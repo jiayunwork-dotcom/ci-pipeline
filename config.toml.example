@@ -1,7 +1,13 @@
 listen_addr = "0.0.0.0:9876"
 storage_dir = "./storage"
 max_size_mb = 500
+per_namespace_max_mb = 200
 ttl_days = 7
 
-# 可选: Bearer Token 认证
+# 可选: 全局超级管理员 Bearer Token (拥有所有namespace读写权限)
 # auth_token = "your-secret-token"
+
+# 可选: 按namespace粒度的访问控制token
+# [namespace_tokens]
+# "my-namespace" = "namespace-specific-token"
+# "another-project" = "another-token"

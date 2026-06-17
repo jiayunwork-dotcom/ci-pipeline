@@ -9,12 +9,22 @@ use tokio::sync::Mutex;
 
 const CHUNK_SIZE: u64 = 10 * 1024 * 1024; // 10MB
 const LARGE_FILE_THRESHOLD: u64 = 100 * 1024 * 1024; // 100MB
+const CLIENT_ID_HEADER: &str = "X-Client-ID";
+
+fn generate_client_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let pid = std::process::id();
+    let count = COUNTER.fetch_add(1, Ordering::SeqCst);
+    format!("ci-pipeline-{}-{}", pid, count)
+}
 
 #[derive(Debug, Clone)]
 pub struct RemoteCacheClient {
     pub config: RemoteCacheConfig,
     pub namespace: String,
     pub stats: Arc<Mutex<RemoteCacheStats>>,
+    pub client_id: String,
     client: reqwest::Client,
 }
 
@@ -23,6 +33,9 @@ pub struct CacheEntryInfo {
     pub key: String,
     pub size_bytes: u64,
     pub last_accessed: String,
+    pub created_by: String,
+    pub access_count: u64,
+    pub last_accessed_by: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -31,6 +44,7 @@ pub struct ServerStats {
     pub total_size_bytes: u64,
     pub hits_last_24h: u64,
     pub misses_last_24h: u64,
+    pub evictions_last_24h: u64,
     pub namespace_counts: std::collections::HashMap<String, usize>,
 }
 
@@ -51,6 +65,7 @@ impl RemoteCacheClient {
             config,
             namespace,
             stats: Arc::new(Mutex::new(RemoteCacheStats::default())),
+            client_id: generate_client_id(),
             client: reqwest::Client::new(),
         }
     }
@@ -66,13 +81,12 @@ impl RemoteCacheClient {
             .ok_or_else(|| anyhow!("Remote cache URL not configured"))
     }
 
-    fn auth_header(&self) -> Option<(String, String)> {
-        self.config.token.as_ref().map(|token| {
-            (
-                "Authorization".to_string(),
-                format!("Bearer {}", token),
-            )
-        })
+    fn apply_common_headers(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let mut req = request.header(CLIENT_ID_HEADER, &self.client_id);
+        if let Some(token) = &self.config.token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+        req
     }
 
     pub async fn upload_cache(&self, key: &str, file_path: &Path) -> Result<bool> {
@@ -107,11 +121,8 @@ impl RemoteCacheClient {
             .await
             .with_context(|| format!("Failed to read file: {:?}", file_path))?;
 
-        let mut request = self.client.put(url).body(data);
-
-        if let Some((key, value)) = self.auth_header() {
-            request = request.header(key, value);
-        }
+        let request = self.client.put(url).body(data);
+        let request = self.apply_common_headers(request);
 
         let response = request
             .send()
@@ -150,15 +161,12 @@ impl RemoteCacheClient {
             let end = offset + bytes_read as u64 - 1;
             let content_range = format!("bytes {}-{}/{}", offset, end, file_size);
 
-            let mut request = self
+            let request = self
                 .client
                 .put(url)
                 .body(chunk.to_vec())
                 .header("Content-Range", content_range);
-
-            if let Some((key, value)) = self.auth_header() {
-                request = request.header(key, value);
-            }
+            let request = self.apply_common_headers(request);
 
             let response = request
                 .send()
@@ -221,10 +229,7 @@ impl RemoteCacheClient {
         let tmp_path = output_path.with_extension("part");
 
         let mut request = self.client.get(url);
-
-        if let Some((key, value)) = self.auth_header() {
-            request = request.header(key, value);
-        }
+        request = self.apply_common_headers(request);
 
         if existing_size > 0 {
             request = request.header("Range", format!("bytes={}-", existing_size));
@@ -336,11 +341,8 @@ impl RemoteCacheClient {
         let base = self.base_url()?;
         let url = format!("{}/cache/{}/{}", base.trim_end_matches('/'), self.namespace, key);
 
-        let mut request = self.client.delete(url);
-
-        if let Some((key_h, value)) = self.auth_header() {
-            request = request.header(key_h, value);
-        }
+        let request = self.client.delete(url);
+        let request = self.apply_common_headers(request);
 
         let response = request
             .send()
@@ -359,11 +361,8 @@ impl RemoteCacheClient {
         let base = self.base_url()?;
         let url = format!("{}/cache/{}", base.trim_end_matches('/'), ns);
 
-        let mut request = self.client.get(&url);
-
-        if let Some((key, value)) = self.auth_header() {
-            request = request.header(key, value);
-        }
+        let request = self.client.get(&url);
+        let request = self.apply_common_headers(request);
 
         let response = request
             .send()
@@ -390,11 +389,8 @@ impl RemoteCacheClient {
         let base = self.base_url()?;
         let url = format!("{}/cache/gc", base.trim_end_matches('/'));
 
-        let mut request = self.client.post(&url);
-
-        if let Some((key, value)) = self.auth_header() {
-            request = request.header(key, value);
-        }
+        let request = self.client.post(&url);
+        let request = self.apply_common_headers(request);
 
         let response = request
             .send()
@@ -421,11 +417,8 @@ impl RemoteCacheClient {
         let base = self.base_url()?;
         let url = format!("{}/stats", base.trim_end_matches('/'));
 
-        let mut request = self.client.get(&url);
-
-        if let Some((key, value)) = self.auth_header() {
-            request = request.header(key, value);
-        }
+        let request = self.client.get(&url);
+        let request = self.apply_common_headers(request);
 
         let response = request
             .send()
@@ -442,6 +435,19 @@ impl RemoteCacheClient {
             .with_context(|| "Failed to parse stats response")?;
 
         Ok(stats)
+    }
+
+    pub async fn fetch_and_update_evictions(&self) -> Result<()> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        if let Ok(server_stats) = self.get_stats().await {
+            let mut local_stats = self.stats.lock().await;
+            local_stats.evictions = server_stats.evictions_last_24h;
+        }
+
+        Ok(())
     }
 
     pub async fn get_local_stats(&self) -> RemoteCacheStats {
